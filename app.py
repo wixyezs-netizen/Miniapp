@@ -1,9 +1,8 @@
 import os
 import json
-import hmac
-import hashlib
 import logging
-from urllib.parse import parse_qs, unquote
+import asyncio
+import threading
 
 from flask import Flask, request, jsonify, render_template_string
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
@@ -14,17 +13,29 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-import asyncio
-import threading
 
 # ─── НАСТРОЙКИ ───────────────────────────────────────────────
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8638584778:AAEDBA2vokaJlo2NXNAr4-K5WzrrZrQWWGs")
-WEBAPP_URL = "https://AimNoob.bothost.tech"
+WEBAPP_URL = "https://aimnoob.bothost.tech"
 HOST = "0.0.0.0"
 PORT = int(os.environ.get("PORT", 8080))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ─── ПОСТОЯННЫЙ EVENT LOOP В ОТДЕЛЬНОМ ПОТОКЕ ─────────────────
+# Это решает ошибку "Event loop is closed"
+bot_loop = asyncio.new_event_loop()
+
+
+def run_bot_loop():
+    """Запускаем event loop в фоновом потоке"""
+    asyncio.set_event_loop(bot_loop)
+    bot_loop.run_forever()
+
+
+bot_thread = threading.Thread(target=run_bot_loop, daemon=True)
+bot_thread.start()
 
 # ─── FLASK APP ────────────────────────────────────────────────
 flask_app = Flask(__name__)
@@ -45,14 +56,6 @@ MINI_APP_HTML = """
             box-sizing: border-box;
         }
 
-        :root {
-            --tg-theme-bg-color: #1a1a2e;
-            --tg-theme-text-color: #eaeaea;
-            --tg-theme-button-color: #e94560;
-            --tg-theme-button-text-color: #ffffff;
-            --tg-theme-secondary-bg-color: #16213e;
-        }
-
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: var(--tg-theme-bg-color, #1a1a2e);
@@ -61,7 +64,6 @@ MINI_APP_HTML = """
             overflow-x: hidden;
         }
 
-        /* ─── HEADER ─── */
         .header {
             background: linear-gradient(135deg, #e94560, #0f3460);
             padding: 30px 20px;
@@ -102,7 +104,6 @@ MINI_APP_HTML = """
             z-index: 1;
         }
 
-        /* ─── USER CARD ─── */
         .user-card {
             background: var(--tg-theme-secondary-bg-color, #16213e);
             margin: 16px;
@@ -133,17 +134,9 @@ MINI_APP_HTML = """
             flex-shrink: 0;
         }
 
-        .user-info h2 {
-            font-size: 18px;
-            margin-bottom: 4px;
-        }
+        .user-info h2 { font-size: 18px; margin-bottom: 4px; }
+        .user-info p { font-size: 13px; opacity: 0.7; }
 
-        .user-info p {
-            font-size: 13px;
-            opacity: 0.7;
-        }
-
-        /* ─── STATS ─── */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -180,10 +173,7 @@ MINI_APP_HTML = """
             letter-spacing: 0.5px;
         }
 
-        /* ─── MENU ─── */
-        .menu-section {
-            margin: 0 16px 16px;
-        }
+        .menu-section { margin: 0 16px 16px; }
 
         .section-title {
             font-size: 13px;
@@ -218,9 +208,7 @@ MINI_APP_HTML = """
             border-color: rgba(233, 69, 96, 0.3);
         }
 
-        .menu-item:active {
-            transform: scale(0.98);
-        }
+        .menu-item:active { transform: scale(0.98); }
 
         .menu-icon {
             font-size: 24px;
@@ -234,24 +222,10 @@ MINI_APP_HTML = """
             flex-shrink: 0;
         }
 
-        .menu-text h3 {
-            font-size: 15px;
-            font-weight: 600;
-        }
+        .menu-text h3 { font-size: 15px; font-weight: 600; }
+        .menu-text p { font-size: 12px; opacity: 0.5; margin-top: 2px; }
+        .menu-arrow { margin-left: auto; opacity: 0.3; font-size: 18px; }
 
-        .menu-text p {
-            font-size: 12px;
-            opacity: 0.5;
-            margin-top: 2px;
-        }
-
-        .menu-arrow {
-            margin-left: auto;
-            opacity: 0.3;
-            font-size: 18px;
-        }
-
-        /* ─── COUNTER GAME ─── */
         .game-section {
             margin: 0 16px 20px;
             background: var(--tg-theme-secondary-bg-color, #16213e);
@@ -261,10 +235,7 @@ MINI_APP_HTML = """
             box-shadow: 0 4px 15px rgba(0,0,0,0.2);
         }
 
-        .game-section h3 {
-            margin-bottom: 16px;
-            font-size: 16px;
-        }
+        .game-section h3 { margin-bottom: 16px; font-size: 16px; }
 
         .counter-display {
             font-size: 56px;
@@ -277,9 +248,7 @@ MINI_APP_HTML = """
             transition: transform 0.15s ease;
         }
 
-        .counter-display.bump {
-            transform: scale(1.2);
-        }
+        .counter-display.bump { transform: scale(1.2); }
 
         .counter-buttons {
             display: flex;
@@ -299,9 +268,7 @@ MINI_APP_HTML = """
             color: white;
         }
 
-        .btn:active {
-            transform: scale(0.95);
-        }
+        .btn:active { transform: scale(0.95); }
 
         .btn-primary {
             background: linear-gradient(135deg, #e94560, #c23152);
@@ -322,7 +289,6 @@ MINI_APP_HTML = """
             font-size: 16px;
         }
 
-        /* ─── TOAST ─── */
         .toast {
             position: fixed;
             bottom: 100px;
@@ -345,7 +311,6 @@ MINI_APP_HTML = """
             transform: translateX(-50%) translateY(0);
         }
 
-        /* ─── FOOTER ─── */
         .footer {
             text-align: center;
             padding: 20px;
@@ -433,48 +398,30 @@ MINI_APP_HTML = """
 
     <button class="btn btn-send" onclick="sendData()">📤 Отправить данные боту</button>
 
-    <div class="footer">
-        AimNoob Mini App v1.0 — Powered by bothost.ru
-    </div>
-
+    <div class="footer">AimNoob Mini App v1.0</div>
     <div class="toast" id="toast"></div>
 
     <script>
-        // ─── TELEGRAM WEBAPP INIT ───
         const tg = window.Telegram.WebApp;
         tg.ready();
         tg.expand();
 
-        // Применяем тему Telegram
-        if (tg.themeParams.bg_color) {
-            document.documentElement.style.setProperty('--tg-theme-bg-color', tg.themeParams.bg_color);
-        }
-        if (tg.themeParams.text_color) {
-            document.documentElement.style.setProperty('--tg-theme-text-color', tg.themeParams.text_color);
-        }
-        if (tg.themeParams.secondary_bg_color) {
-            document.documentElement.style.setProperty('--tg-theme-secondary-bg-color', tg.themeParams.secondary_bg_color);
-        }
-
-        // ─── USER INFO ───
         const user = tg.initDataUnsafe?.user;
         if (user) {
             const firstName = user.first_name || 'User';
             const lastName = user.last_name || '';
-            document.getElementById('userName').textContent = `${firstName} ${lastName}`.trim();
+            document.getElementById('userName').textContent = (firstName + ' ' + lastName).trim();
             document.getElementById('userAvatar').textContent = firstName.charAt(0).toUpperCase();
-            document.getElementById('userStatus').textContent = `ID: ${user.id} • @${user.username || 'no_username'}`;
+            document.getElementById('userStatus').textContent = 'ID: ' + user.id + ' • @' + (user.username || 'no_username');
         } else {
             document.getElementById('userName').textContent = 'Гость';
             document.getElementById('userStatus').textContent = 'Откройте через Telegram';
             document.getElementById('userAvatar').textContent = 'G';
         }
 
-        // ─── COUNTER LOGIC ───
         let count = parseInt(localStorage.getItem('aimnoob_count') || '0');
         let totalClicks = parseInt(localStorage.getItem('aimnoob_clicks') || '0');
         let visits = parseInt(localStorage.getItem('aimnoob_visits') || '0') + 1;
-
         localStorage.setItem('aimnoob_visits', visits);
 
         document.getElementById('counter').textContent = count;
@@ -496,39 +443,29 @@ MINI_APP_HTML = """
             document.getElementById('clicks').textContent = totalClicks;
             updateLevel();
 
-            // Хаптик
-            if (tg.HapticFeedback) {
-                tg.HapticFeedback.impactOccurred('light');
-            }
+            if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
         }
 
         function resetCounter() {
             count = 0;
             localStorage.setItem('aimnoob_count', count);
             document.getElementById('counter').textContent = count;
-
-            if (tg.HapticFeedback) {
-                tg.HapticFeedback.notificationOccurred('warning');
-            }
+            if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('warning');
             showToast('🔄 Счётчик сброшен!');
         }
 
         function updateLevel() {
-            const level = Math.floor(totalClicks / 10) + 1;
-            document.getElementById('level').textContent = level;
+            document.getElementById('level').textContent = Math.floor(totalClicks / 10) + 1;
         }
 
-        // ─── SEND DATA TO BOT ───
         function sendData() {
             const data = JSON.stringify({
                 action: 'game_result',
                 counter: count,
                 total_clicks: totalClicks,
                 visits: visits,
-                level: Math.floor(totalClicks / 10) + 1,
-                timestamp: new Date().toISOString()
+                level: Math.floor(totalClicks / 10) + 1
             });
-
             try {
                 tg.sendData(data);
                 showToast('✅ Данные отправлены!');
@@ -537,229 +474,166 @@ MINI_APP_HTML = """
             }
         }
 
-        // ─── TOAST ───
         function showToast(message) {
             const toast = document.getElementById('toast');
             toast.textContent = message;
             toast.classList.add('show');
             setTimeout(() => toast.classList.remove('show'), 2500);
         }
-
-        // ─── Main Button (опционально) ───
-        tg.MainButton.setText('📤 Отправить результат');
-        tg.MainButton.color = '#e94560';
-        tg.MainButton.textColor = '#ffffff';
-        tg.MainButton.onClick(sendData);
-        // tg.MainButton.show(); // Раскомментируй если нужна кнопка внизу
     </script>
 </body>
 </html>
 """
 
-# ─── FLASK ROUTES ─────────────────────────────────────────────
-
-@flask_app.route("/")
-def index():
-    """Главная страница — Mini App"""
-    return render_template_string(MINI_APP_HTML)
-
-
-@flask_app.route("/health")
-def health():
-    """Health check для bothost"""
-    return jsonify({"status": "ok", "bot": "AimNoob"})
-
-
-@flask_app.route("/api/user", methods=["POST"])
-def api_user():
-    """API endpoint (для будущего расширения)"""
-    data = request.get_json(silent=True) or {}
-    return jsonify({"status": "ok", "received": data})
-
-
-# ─── WEBHOOK ROUTE ────────────────────────────────────────────
-
-bot_app = None  # Будет инициализировано позже
-
-
-@flask_app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
-def webhook():
-    """Приём обновлений от Telegram через webhook"""
-    if bot_app is None:
-        return "Bot not ready", 503
-
-    update = Update.de_json(request.get_json(force=True), bot_app.bot)
-
-    # Обработка асинхронно
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(bot_app.process_update(update))
-    finally:
-        loop.close()
-
-    return "OK", 200
-
-
 # ─── TELEGRAM BOT HANDLERS ───────────────────────────────────
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /start"""
     user = update.effective_user
     keyboard = [
-        [InlineKeyboardButton(
-            "🎯 Открыть Mini App",
-            web_app=WebAppInfo(url=WEBAPP_URL)
-        )],
-        [InlineKeyboardButton(
-            "📢 Канал разработчика",
-            url="https://t.me/AimNoob"
-        )],
+        [InlineKeyboardButton("🎯 Открыть Mini App", web_app=WebAppInfo(url=WEBAPP_URL))],
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
     await update.message.reply_text(
         f"👋 Привет, <b>{user.first_name}</b>!\n\n"
         f"🎯 Я бот <b>AimNoob</b> с Mini App!\n\n"
-        f"Нажми кнопку ниже, чтобы открыть приложение 👇",
+        f"Нажми кнопку ниже 👇",
         parse_mode="HTML",
-        reply_markup=reply_markup,
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /help"""
     await update.message.reply_text(
         "📖 <b>Помощь</b>\n\n"
         "🔹 /start — Главное меню\n"
-        "🔹 /help — Эта справка\n"
+        "🔹 /help — Справка\n"
         "🔹 /app — Открыть Mini App\n"
-        "🔹 /stats — Твоя статистика\n\n"
-        "💡 Нажми кнопку <b>«Открыть Mini App»</b> чтобы запустить приложение!",
+        "🔹 /stats — Статистика\n",
         parse_mode="HTML",
     )
 
 
 async def app_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /app — открыть мини-приложение"""
-    keyboard = [
-        [InlineKeyboardButton(
-            "🚀 Запустить Mini App",
-            web_app=WebAppInfo(url=WEBAPP_URL)
-        )],
-    ]
+    keyboard = [[InlineKeyboardButton("🚀 Запустить", web_app=WebAppInfo(url=WEBAPP_URL))]]
     await update.message.reply_text(
-        "🎮 Нажми кнопку, чтобы открыть приложение:",
+        "🎮 Нажми кнопку:",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /stats"""
     user = update.effective_user
     await update.message.reply_text(
         f"📊 <b>Статистика</b>\n\n"
-        f"👤 Имя: {user.first_name}\n"
-        f"🆔 ID: <code>{user.id}</code>\n"
-        f"📛 Username: @{user.username or 'не указан'}\n\n"
-        f"💡 Больше статистики — в Mini App!",
+        f"👤 {user.first_name}\n"
+        f"🆔 <code>{user.id}</code>\n"
+        f"📛 @{user.username or 'не указан'}\n\n"
+        f"💡 Больше — в Mini App!",
         parse_mode="HTML",
     )
 
 
 async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка данных из Mini App"""
     try:
         data = json.loads(update.effective_message.web_app_data.data)
-        counter = data.get("counter", 0)
-        total_clicks = data.get("total_clicks", 0)
-        visits = data.get("visits", 0)
-        level = data.get("level", 1)
-
         await update.message.reply_text(
-            f"📦 <b>Данные из Mini App получены!</b>\n\n"
-            f"🎮 Счётчик: <b>{counter}</b>\n"
-            f"👆 Всего кликов: <b>{total_clicks}</b>\n"
-            f"👁 Визитов: <b>{visits}</b>\n"
-            f"⭐ Уровень: <b>{level}</b>\n\n"
-            f"🔥 Отлично! Продолжай играть!",
+            f"📦 <b>Данные получены!</b>\n\n"
+            f"🎮 Счётчик: <b>{data.get('counter', 0)}</b>\n"
+            f"👆 Кликов: <b>{data.get('total_clicks', 0)}</b>\n"
+            f"👁 Визитов: <b>{data.get('visits', 0)}</b>\n"
+            f"⭐ Уровень: <b>{data.get('level', 1)}</b>",
             parse_mode="HTML",
         )
     except Exception as e:
-        logger.error(f"Error processing web_app_data: {e}")
+        logger.error(f"WebApp data error: {e}")
         await update.message.reply_text("❌ Ошибка обработки данных.")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка обычных сообщений"""
-    keyboard = [
-        [InlineKeyboardButton(
-            "🎯 Открыть Mini App",
-            web_app=WebAppInfo(url=WEBAPP_URL)
-        )],
-    ]
+    keyboard = [[InlineKeyboardButton("🎯 Mini App", web_app=WebAppInfo(url=WEBAPP_URL))]]
     await update.message.reply_text(
-        "🤖 Я понимаю только команды!\n\n"
-        "Попробуй /start или открой Mini App 👇",
+        "🤖 Попробуй /start или открой Mini App 👇",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
 # ─── ИНИЦИАЛИЗАЦИЯ БОТА ──────────────────────────────────────
 
+bot_app = None
+
+
 def setup_bot():
-    """Создаём и настраиваем бота"""
+    """Создаём бота с использованием постоянного event loop"""
     global bot_app
 
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Регистрируем хэндлеры
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("app", app_command))
     application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Обработка данных из WebApp
-    application.add_handler(
-        MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data)
-    )
-
-    # Обработка обычных сообщений
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
-    )
-
-    bot_app = application
+    # Инициализируем бота в постоянном event loop
+    future = asyncio.run_coroutine_threadsafe(application.initialize(), bot_loop)
+    future.result(timeout=30)
 
     # Устанавливаем webhook
-    async def set_webhook():
-        await application.initialize()
-        webhook_url = f"{WEBAPP_URL}/webhook/{BOT_TOKEN}"
+    webhook_url = f"{WEBAPP_URL}/webhook/{BOT_TOKEN}"
+
+    async def _set_webhook():
         await application.bot.set_webhook(url=webhook_url)
-        logger.info(f"✅ Webhook установлен: {webhook_url}")
+        logger.info(f"✅ Webhook: {webhook_url}")
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    future = asyncio.run_coroutine_threadsafe(_set_webhook(), bot_loop)
+    future.result(timeout=30)
+
+    bot_app = application
+    logger.info("🤖 Бот готов!")
+
+
+# ─── FLASK ROUTES ─────────────────────────────────────────────
+
+@flask_app.route("/")
+def index():
+    return render_template_string(MINI_APP_HTML)
+
+
+@flask_app.route("/health")
+def health():
+    return jsonify({"status": "ok", "bot": "AimNoob"})
+
+
+@flask_app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    if bot_app is None:
+        return "Bot not ready", 503
+
+    update = Update.de_json(request.get_json(force=True), bot_app.bot)
+
+    # ЭТО КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ:
+    # Используем постоянный event loop вместо создания нового каждый раз
+    future = asyncio.run_coroutine_threadsafe(
+        bot_app.process_update(update),
+        bot_loop
+    )
+
     try:
-        loop.run_until_complete(set_webhook())
-    finally:
-        loop.close()
+        future.result(timeout=25)
+    except Exception as e:
+        logger.error(f"Webhook processing error: {e}")
 
-    logger.info("🤖 Бот инициализирован!")
+    return "OK", 200
 
 
 # ─── ЗАПУСК ───────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    logger.info("🚀 Запуск AimNoob Bot + Mini App...")
-    logger.info(f"🌐 Web App URL: {WEBAPP_URL}")
+    logger.info("🚀 Запуск AimNoob...")
 
-    # Инициализируем бота
     try:
         setup_bot()
     except Exception as e:
-        logger.error(f"❌ Ошибка инициализации бота: {e}")
-        logger.info("⚠️ Flask запустится без бота (только Mini App)")
+        logger.error(f"❌ Ошибка бота: {e}")
 
-    # Запускаем Flask
     flask_app.run(host=HOST, port=PORT, debug=False)
